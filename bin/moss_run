@@ -1,0 +1,287 @@
+#!/usr/bin/python
+
+import os, readline, util, tempfile, shutil, subprocess
+
+banner = """  __  __  ___  ____ ____  
+ |  \/  |/ _ \/ ___/ ___| 
+ | |\/| | | | \___ \___ \ 
+ | |  | | |_| |___) |__) |
+ |_|  |_|\___/|____/____/ 
+                          
+Utility script to run MOSS against submission archives.                                           
+By	Chirag Sangani
+	csangani@stanford.edu
+"""
+
+scriptPath = os.path.dirname(os.path.realpath(__file__))
+
+languages = {
+		'c':		['*.c'],
+  		'cc':		['*.cpp'],
+		'java':		['*.java'],
+		'ml':		['*.ml'],
+		'python':	['*.python'],
+		'matlab':	['*.m'],
+		'javascript':	['*.js']
+	    }
+
+modes = (
+		'Compare current submissions against each other',
+         	'Compare current submissions against each other and against past submissions',
+		'Compare submissions of specific IDs'
+	)
+
+def checkArchivePath(archivePath):
+    while not os.path.isdir(archivePath):
+	archivePath = raw_input('The archive path {} does not exist. Please input the path to the submission archives: '.format(archivePath))
+	if archivePath[-1] == '/':
+	    archivePath = archivePath[:-1]
+    print
+    return os.path.realpath(archivePath)
+
+def selectFileExtensions(lang):
+    newList = []
+    if lang in languages:
+        rawList = raw_input('Files that match the following patterns will be included: {}. Provide a comma-separated list of additional patterns, if any (e.g. *.h,*.cpp): '.format(repr(languages[lang])))
+	newList = languages[lang] + [s.strip() for s in rawList.split(',') if s.strip() != '']
+    else:
+        rawList = raw_input('Provide a comma separated list of file patterns to include (e.g. *.h,*.cpp, default: *): ')
+	newList = [s.strip() for s in rawList.split(',') if s.strip() != '']
+    if len(newList) == 0:
+        newList += ['*']
+    return newList
+
+def selectSubmissionsRootDir():
+    rootDir = os.path.realpath('.')
+    newRootDir = raw_input('Provide the path to the root directory where all the current submissions are stored. This directory should have all submissions stored separately in their respective directories each with the name format <SUnetID>_<submissionNumber> (default: .): ')
+    if newRootDir == '':
+        return rootDir
+    while not os.path.isdir(newRootDir):
+        newRootDir = raw_input('That directory does not exist! Provide a path to a valid directory: ')
+    return os.path.realpath(newRootDir)
+
+def selectIDs():
+    IDs = []
+    rawIDs = raw_input('Provide a comma-separated list SUnet ID\'s that you wish compare: ')
+    IDs = [s.strip() for s in rawIDs.split(',') if s.strip() != '']
+    while len(IDs) == 0:
+        rawIDs = raw_input('Provide atleast one SUnet ID: ')
+	IDs = [s.strip() for s in rawIDs.split(',') if s.strip() != '']
+    return IDs
+
+def selectQuarters():
+    quarters = []
+    rawQuarters = raw_input('Provide a comma-separated list of quarters that you wish to compare against (default: *): ')
+    quarters = [q.strip() for q in rawQuarters.split(',') if q.strip() != '']
+    if len(quarters) == 0:
+        quarters += ['*']
+    return quarters
+
+def selectStarterCodeDir():
+    starterDir = raw_input('Provide the path where all the starter code is stored. Only files that match the pattern provided earlier will be used (default: None): ')
+    if starterDir == '':
+	return None
+    while not os.path.isdir(starterDir):
+        starterDir = raw_input('That directory is not valid. Please provide a valid path (or leave it blank if you don\'t have any starter code to provide): ')
+	if starterDir == '':
+	    return None
+    return os.path.realpath(starterDir)
+
+def runMoss(archivePath, courseNumber, assignmentName, quarters, language, extensions, submissionsRootDir, idFilter, starterCodeDir):
+    
+    print 'Archive Path:', archivePath
+    print 'Course Number:', courseNumber
+    print 'Assignment Name:', assignmentName
+    print 'Quarters:', quarters
+    print 'Language:', language
+    print 'File extensions:', extensions
+    print 'Submissions Directory:', submissionsRootDir
+    print 'SUnet IDs:', idFilter
+    print 'Starter Code Directory:', starterCodeDir
+
+    print
+
+    assert(language is not None)
+    assert(len(extensions) != 0)
+    assert(submissionsRootDir is not None)
+
+    tempDir = tempfile.mkdtemp(prefix = 'moss')
+
+    try:
+
+        # Create starter code file
+        if starterCodeDir is not None:
+
+	    print 'Copying starter code...'
+	
+    	    # Copy all starter code
+            shutil.copytree(starterCodeDir, '{}/starterCode'.format(tempDir))
+
+	    print 'Processing starter code...'
+
+            # Flatten starter code directory
+	    util.flattenDir('{}/starterCode'.format(tempDir))
+
+	    # Concatenate all starter code into one file
+	    command = ['cat'] + ['{}/starterCode/{}'.format(tempDir, e) for e in extensions] + ['>', '{}/starterCode/base'.format(tempDir)]
+
+	    print ' '.join(command)
+	    subprocess.call(' '.join(command), shell = True)
+	
+	# Create temporary submissions directory
+	print 'Copying submissions...'
+
+	if idFilter is None:
+	    command = 'rsync -a --include="*/" ' + ' '.join(['--include="{}"'.format(e) for e in extensions]) + ' --exclude="*" {}/ {}/submissions'.format(submissionsRootDir, tempDir)
+	    subprocess.call(command, shell = True)
+        else:
+	    command = 'rsync -a --include="*/" ' + ' '.join(['--include="{}_*/{}"'.format(i, e) for i in idFilter for e in extensions]) + ' --exclude="*" {}/ {}/submissions'.format(submissionsRootDir, tempDir)
+	    subprocess.call(command, shell = True)
+
+        # Retain only the last submissions for each SUID
+	print 'Deleting old submissions...'
+
+	util.retainLast('{}/submissions'.format(tempDir))
+
+        # Flatten all submission directories
+	print 'Flattening submission directories...'
+
+	for d in os.listdir('{}/submissions'.format(tempDir)):
+	    util.flattenDir('{}/submissions/{}'.format(tempDir, d))\
+
+	# Convert all files to ASCII
+	print 'Converting files to ASCII...'
+
+	for e in extensions:
+	    command = 'find -wholename "{}/{}" '.format(tempDir, e) + '-exec recode -f ..ASCII {} \\;'
+	    subprocess.call(command, shell = True)
+
+	# Convert all line endings to LF
+	print 'Converting line endings...'
+
+        for e in extensions:
+	    command = 'find -wholename "{}/{}" '.format(tempDir, e) + '-exec perl -pi -e \'s/\\r\\n|\\n|\\r/\\n/g\' {} \\;'
+	    subprocess.call(command, shell = True)
+
+	# Run MOSS
+	print "Submitting files to  MOSS..."
+
+        cwd = os.getcwd()
+
+	if courseNumber is not None and assignmentName is not None:
+	    os.chdir('{}/{}/{}'.format(archivePath, courseNumber, assignmentName))
+
+	command = ['{}/res/moss'.format(scriptPath), 
+		'-l{}'.format(language),
+		'-d'] + [
+		'-c "Source: {}<br/>Course: {}<br/>Assignment: {}<br/>Quarters: {}"'.format(submissionsRootDir, courseNumber, assignmentName, quarters)] + ([
+		'-b', '{}/starterCode/base'.format(tempDir)] if starterCodeDir is not None else []) + [
+		'{}/submissions/*/{}'.format(tempDir, e) for e in extensions] + ([
+		'{}/*/{}'.format(q, e) for e in extensions for q in quarters] if quarters is not None else [])
+
+	print ' '.join(command)
+
+	subprocess.call(' '.join(command), shell = True)
+
+	os.chdir(cwd)
+
+    finally:
+        # Cleanup
+	print "Deleting temporary directory {}".format(tempDir)
+        #shutil.rmtree(tempDir)
+	    
+def createListItem(num, item):
+    return '   [{}]\t{}'.format(num, item)
+
+def selectOption(prompt, options, custom = False):
+    print prompt
+    for o in options:
+        print createListItem(options.index(o), o)
+    if custom:
+        print createListItem(len(options), 'Other')
+    while True:
+    	index = raw_input('Choose index: ')
+    	try:
+	    if int(index) == len(options) and custom:
+	        return raw_input('Specify: ')
+            return options[int(index)]
+    	except:
+            print 'Invalid index!'
+
+def printLog(msg):
+    log = open('moss.log', 'w')
+    log.write(msg)
+    log.close()
+    print '\nError:\n{}'.format(msg)
+    print '\nSaved to moss.log'
+
+if __name__ == '__main__':
+    try:
+    	print banner
+
+        archivePath = None
+	courseNumber = None
+	assignmentName = None
+	idFilter = None
+	quarters = None
+
+	# Select mode
+	mode = modes.index(selectOption('What do you want to do?', modes))
+
+    	if mode == 1:
+	    
+            archivePath = os.path.realpath('{}/../archives'.format(scriptPath))
+
+    	    # Check whether base path to archives exists
+	    archivePath = checkArchivePath(archivePath)
+	
+    	    # Obtain course number and check for existence in archives
+            courseNumber = selectOption('Select a course:', os.listdir(archivePath))
+
+	    print
+
+            # Obtain assignment name
+            assignmentName = selectOption('Select an assigment:', os.listdir('{}/{}'.format(archivePath, courseNumber)))
+
+	    print
+
+	    # Obtain quarters
+	    quarters = selectQuarters()
+
+	    print
+
+        # Obtain language name
+        language = selectOption('Select language:', languages.keys(), True)
+
+	print
+
+	# Obtain additional extensions
+	extensions = selectFileExtensions(language)
+
+	print
+
+	# Obtain submissions root directory
+        submissionsRootDir = selectSubmissionsRootDir()
+
+	print
+
+	if mode == 2:
+
+	    # Obtain list of SUnet ID's
+	    idFilter = selectIDs()
+
+	    print
+	
+	# Obtain starter code directory location
+	starterCodeDir = selectStarterCodeDir()
+
+	print
+
+        # Run MOSS
+	runMoss(archivePath, courseNumber, assignmentName, quarters, language, extensions, submissionsRootDir, idFilter, starterCodeDir)
+
+    except KeyboardInterrupt, SystemExit:
+        print '\nCancelled!'
+        pass
+    except Exception as ex:
+        printLog(repr(ex)) 

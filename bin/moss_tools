@@ -1,0 +1,61 @@
+#!/usr/bin/python
+
+import util, sys, getopt
+
+directory = ['.']
+
+def Usage():
+
+    print """
+Usage:    mosstools [tool] [options] <directory list>
+
+Available tools are:
+    {}
+
+Options are:
+    -s SEPARATOR    Characters that separate the SUID from the assignment
+                    number. If multiple separators are present, the last one
+                    is split. Default is underscore ("_"). Valid for retainLast and
+                    mergeRetakes
+    -v        Verbose
+    -d        Dry run. Does not actually delete directories.
+
+Example:
+    mosstools deleteDuplicates -s '_' .
+""".format(str(util.tools))
+
+if __name__ == '__main__':
+    try:
+        tool = sys.argv[1]
+        if tool not in util.tools:
+            raise "Invalid tool"
+        optlist, remaining = getopt.gnu_getopt(sys.argv[2:], 's:vd')
+        opt_args = {'-s': '_'}
+        for arg, val in optlist:
+            opt_args[arg] = val
+        if remaining:
+            directory = map(lambda x: x.rstrip('/'), remaining)
+    except Exception as ex:
+        Usage()
+        print repr(ex)
+        sys.exit()
+       
+    separator = '_'
+    verbose = False
+    dryRun = False
+    if opt_args['-s']:
+        separator = opt_args['-s']
+
+    if '-v' in opt_args:
+        verbose = True
+
+    if '-d' in opt_args:
+        dryRun = True
+
+    for d in directory:
+        if tool == 'mergeRetakes':
+            util.mergeRetakes(d, separator = separator, verbose = verbose, dryRun = dryRun)
+        elif tool == 'retainLast':
+            util.retainLast(d, separator = separator, verbose = verbose, dryRun = dryRun)
+        elif tool == 'flattenDir':
+            util.flattenDir(d, verbose = verbose, dryRun = dryRun)
